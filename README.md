@@ -22,15 +22,15 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        IMO PROTOCOL                                 │
 │                                                                     │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐      │
-│  │ 1.PROPOSE│───>│ 2.FUND   │───>│ 3.VOTE   │───>│ 4.TRAIN  │      │
-│  │  Paper   │    │ Datasets │    │ Community│    │  Swarm   │      │
-│  └──────────┘    └──────────┘    └──────────┘    └────┬─────┘      │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐       │
+│  │ 1.PROPOSE│───>│ 2.FUND   │───>│ 3.VOTE   │───>│ 4.TRAIN  │       │
+│  │  Paper   │    │ Datasets │    │ Community│    │  Swarm   │       │
+│  └──────────┘    └──────────┘    └──────────┘    └────┬─────┘       │
 │                                                       │             │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐        │             │
-│  │ 7.REWARD │<───│ 6.EVAL   │<───│ 5.SUBMIT │<───────┘             │
-│  │  $IMO    │    │ Quality  │    │  Model   │                      │
-│  └──────────┘    └──────────┘    └──────────┘                      │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐         │             │
+│  │ 7.REWARD │<───│ 6.EVAL   │<───│ 5.SUBMIT │<────────┘             │
+│  │  $IMO    │    │ Quality  │    │  Model   │                       │
+│  └──────────┘    └──────────┘    └──────────┘                       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,7 +97,7 @@ Built-in denoising diffusion training loop with:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    CLI  (imo)                             │
+│                    CLI  (imo)                           │
 ├──────────┬──────────┬──────────────┬────────────────────┤
 │   Data   │ Protocol │   Training   │       Node         │
 │  Layer   │  Layer   │    Engine    │      Layer         │
@@ -236,25 +236,25 @@ print(f"Contributors: {project.num_data_contributors}")
 
 ## Tokenomics
 
-| Allocation | Share | Vesting |
-|-----------|-------|---------|
-| Community Rewards | 40% | Distributed per-IMO based on quality |
-| Treasury | 20% | Protocol development |
-| Team | 15% | 4-year linear vesting |
-| Investors | 15% | 6-month lockup |
-| Ecosystem | 10% | Grants, partnerships |
+| Allocation        | Share | Vesting                              |
+|-------------------|-------|--------------------------------------|
+| Community Rewards | 40%   | Distributed per-IMO based on quality |
+| Treasury          | 20%   | Protocol development                 |
+| Team              | 15%   | 4-year linear vesting                |
+| Investors         | 15%   | 6-month lockup                       |
+| Ecosystem         | 10%   | Grants, partnerships                 |
 
 **Total Supply: 1,000,000,000 $IMO**
 
 ### Quality Multipliers
 
-| Score | Level | Multiplier | Effect |
-|-------|-------|-----------|--------|
-| 95–100 | Breakthrough | 2.0x | Double the base pool |
-| 85–94 | Excellent | 1.5x | |
-| 70–84 | Good | 1.0x | Base pool |
-| 50–69 | Fair | 0.5x | |
-| < 50 | Poor | 0.0x | No rewards |
+| Score  | Level        | Multiplier | Effect               |
+|--------|--------------|------------|----------------------|
+| 95–100 | Breakthrough | 2.0x       | Double the base pool |
+| 85–94  | Excellent    | 1.5x       |                      |
+| 70–84  | Good         | 1.0x       | Base pool            |
+| 50–69  | Fair         | 0.5x       |                      |
+| < 50   | Poor         | 0.0x       | No rewards           |
 
 ---
 
@@ -272,16 +272,16 @@ pytest --cov=imo --cov-report=term-missing       # coverage
 
 ### Key Dependencies
 
-| Package | Purpose |
-|---------|---------|
-| `hivemind` | Decentralized training, DHT, gradient averaging |
-| `torch` | Deep learning framework |
-| `transformers` | Model architectures and tokenizers |
-| `datasets` | Dataset loading and processing |
-| `opacus` | Differential privacy for PyTorch |
-| `web3` | Ethereum smart contract interaction |
-| `pydantic` | Data validation |
-| `click` | CLI framework |
+| Package        | Purpose                                         |
+|----------------|-------------------------------------------------|
+| `hivemind`     | Decentralized training, DHT, gradient averaging |
+| `torch`        | Deep learning framework                         | 
+| `transformers` | Model architectures and tokenizers              |
+| `datasets`     | Dataset loading and processing                  |
+| `opacus`       | Differential privacy for PyTorch                |
+| `web3`         | Ethereum smart contract interaction             |
+| `pydantic`     | Data validation                                 |
+| `click`        | CLI framework                                   |
 
 ---
 

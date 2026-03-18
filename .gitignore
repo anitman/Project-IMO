@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Opencode (exclude from git)
+.opencode/
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+logs/
+
+# AI/LLM guidance files (local use only, not part of the project)
+AGENTS.md
+ARCHITECTURE.md
+CLAUDE.md
+SKILL.md

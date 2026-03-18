@@ -1,0 +1,73 @@
+[node]
+# DHT bootstrap peers (multiaddr format)
+bootstrap_peers = []
+# Advertised VRAM in GB (auto-detected if 0)
+vram_gb = 0
+# Minimum uptime commitment in hours
+min_uptime_hours = 4
+# Bandwidth advertised (Mbps)
+bandwidth_mbps = 100
+
+[training]
+# Default gradient compression method: top_k | sign
+compression = "top_k"
+# Top-K sparsification percentage
+top_k_percent = 1.0
+# Mixed precision dtype for communication: fp16 | fp8 | bf16
+comm_dtype = "fp16"
+# Checkpoint interval in steps
+checkpoint_interval = 1000
+# Number of checkpoints to keep
+keep_checkpoints = 5
+# Target global batch size (hivemind accumulates until this)
+target_batch_size = 4096
+# Local batch size per step
+batch_size = 32
+# Learning rate
+learning_rate = 1e-4
+# Weight decay
+weight_decay = 0.01
+# Warmup steps
+warmup_steps = 1000
+# Maximum training steps
+max_steps = 100000
+# Gradient accumulation steps
+gradient_accumulation_steps = 1
+
+[training.byzantine]
+# Aggregation strategy: federated_averaging | trimmed_mean | krum
+aggregation_strategy = "trimmed_mean"
+# Trim ratio for trimmed_mean
+trim_ratio = 0.1
+# Poisoning detection threshold (z-score)
+poisoning_threshold = 2.0
+
+[training.diffusion]
+# Number of diffusion timesteps
+num_steps = 1000
+# Noise schedule: cosine | linear | scaled_linear
+noise_schedule = "cosine"
+# Prediction type: epsilon | v_prediction | sample
+prediction_type = "epsilon"
+
+[protocol]
+# Ethereum RPC endpoint
+rpc_url = "http://localhost:8545"
+# IMO governance contract address
+governance_contract = ""
+# IMO token contract address
+token_contract = ""
+# Reward sensitivity parameter (k)
+reward_sensitivity = 0.1
+
+[data]
+# Minimum quality score to accept a dataset contribution
+min_quality_score = 0.7
+# Differential privacy epsilon
+dp_epsilon = 8.0
+# Enable PII detection
+pii_detection = true
+# Maximum dataset size per contribution (MB)
+max_contribution_size_mb = 50000
+# Run security scan on contributed data
+security_scan = true

@@ -295,6 +295,18 @@ pytest --cov=imo --cov-report=term-missing       # coverage
 
 ---
 
+## Acknowledgments
+
+IMO stands on the shoulders of two groundbreaking projects. Without them, decentralized swarm training would still be a whiteboard sketch.
+
+- **[Hivemind](https://github.com/learning-at-home/hivemind)** — Decentralized deep learning framework by [Learning@home](https://github.com/learning-at-home) (Max Ryabinin, Alexander Borzunov, et al.). Hivemind provides the DHT-based peer discovery, collaborative optimizer, and decentralized gradient averaging that form the backbone of IMO's training engine. Paper: *[Towards Crowdsourced Training of Large Neural Networks using Decentralized Mixture-of-Experts](https://arxiv.org/abs/2002.04013)*.
+
+- **[Petals](https://github.com/bigscience-workshop/petals)** — Run large language models at home, BitTorrent-style, by [BigScience](https://github.com/bigscience-workshop) (Alexander Borzunov, Max Ryabinin, et al.). IMO's pipeline parallelism architecture — BlockServer, RemoteSequential, DHT-based block routing, and fault-tolerant rerouting — is directly inspired by Petals' elegant design for splitting transformer blocks across consumer GPUs. Paper: *[Petals: Collaborative Inference and Fine-tuning of Large Models](https://arxiv.org/abs/2209.01188)*.
+
+We are deeply grateful to these teams for open-sourcing their work and making decentralized AI training a reality.
+
+---
+
 ## License
 
 MIT

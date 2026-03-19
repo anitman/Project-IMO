@@ -23,6 +23,13 @@ from imo.node.discovery import PeerDiscovery, PeerInfo
 from imo.node.scheduler import VRAMScheduler
 from imo.training.aggregator import AggregationStrategy, FederatedAveraging, TrimmedMean
 from imo.training.checkpoint import CheckpointManager
+from imo.training.pipeline import (
+    BlockServer,
+    PipelineRouter,
+    RemoteBlock,
+    RemoteSequential,
+    build_remote_pipeline,
+)
 from imo.training.security import PoisoningDetector
 from imo.training.verifier import GradientVerifier
 
@@ -79,6 +86,10 @@ class TrainingConfig:
     checkpoint_dir: str = "./checkpoints"
     checkpoint_interval: int = 1000
     keep_checkpoints: int = 5
+
+    # Parallelism mode: "data_parallel" (default) or "pipeline_parallel"
+    parallelism_mode: str = "data_parallel"
+    total_blocks: int = 0  # Number of transformer blocks (for pipeline mode)
 
     # Diffusion-specific (for image/video/audio generation)
     is_diffusion: bool = False
@@ -162,6 +173,10 @@ class DistributedTrainingEngine:
         )
         self.verifier = GradientVerifier()
 
+        # Pipeline parallelism
+        self.pipeline_router: PipelineRouter | None = None
+        self.remote_sequential: RemoteSequential | None = None
+
         # Tracking
         self._step = 0
         self._contributions: dict[str, dict[str, float]] = {}
@@ -203,8 +218,30 @@ class DistributedTrainingEngine:
             verbose=True,
         )
 
+        # Pipeline parallelism setup
+        if self.config.parallelism_mode == "pipeline_parallel":
+            await self._initialize_pipeline()
+
         self.status = TrainingStatus.SCHEDULING
         logger.info("Hivemind optimizer initialized, waiting for peers...")
+
+    async def _initialize_pipeline(self) -> None:
+        """Set up pipeline parallelism: discover servers and build remote chain."""
+        self.pipeline_router = PipelineRouter(dht=self.dht)
+
+        if self.config.total_blocks <= 0:
+            # Auto-detect from model
+            all_layers = list(self.model.children())
+            self.config.total_blocks = len(all_layers)
+
+        await self.pipeline_router.discover_servers(self.config.project_id)
+        chain = self.pipeline_router.build_chain(self.config.total_blocks)
+        self.remote_sequential = build_remote_pipeline(self.model, chain)
+
+        logger.info(
+            "Pipeline parallelism initialized: %d servers, %d total blocks",
+            len(chain), self.config.total_blocks,
+        )
 
     async def train_step(
         self,
@@ -219,7 +256,9 @@ class DistributedTrainingEngine:
         self.status = TrainingStatus.TRAINING
         self.model.train()
 
-        if self.config.is_diffusion:
+        if self.config.parallelism_mode == "pipeline_parallel" and self.remote_sequential is not None:
+            loss = self._pipeline_forward(batch, loss_fn)
+        elif self.config.is_diffusion:
             loss = self._diffusion_forward(batch, loss_fn)
         else:
             loss = self._standard_forward(batch, loss_fn)
@@ -268,6 +307,35 @@ class DistributedTrainingEngine:
         if hasattr(outputs, "loss"):
             return outputs.loss
         raise ValueError("Model must return loss or provide loss_fn")
+
+    def _pipeline_forward(
+        self,
+        batch: dict[str, torch.Tensor],
+        loss_fn: Any,
+    ) -> torch.Tensor:
+        """Forward pass using pipeline parallelism (Petals-style).
+
+        Activations flow through RemoteSequential, which routes them
+        across the server chain. Each server processes its block range
+        and passes outputs to the next.
+        """
+        inputs = batch.get("input_ids", batch.get("inputs_embeds", batch.get("input")))
+        if inputs is None:
+            raise ValueError("Pipeline mode requires 'input_ids', 'inputs_embeds', or 'input' in batch")
+
+        # Forward through remote pipeline
+        output = self.remote_sequential(inputs)
+
+        # Compute loss
+        if loss_fn is not None:
+            return loss_fn(output, batch)
+
+        labels = batch.get("labels")
+        if labels is not None:
+            return torch.nn.functional.cross_entropy(
+                output.view(-1, output.size(-1)), labels.view(-1)
+            )
+        raise ValueError("Pipeline mode requires loss_fn or 'labels' in batch")
 
     def _diffusion_forward(
         self,

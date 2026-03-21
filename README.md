@@ -388,7 +388,19 @@ IMO stands on the shoulders of two groundbreaking projects. Without them, decent
 
 - **[Petals](https://github.com/bigscience-workshop/petals)** — Run large language models at home, BitTorrent-style, by [BigScience](https://github.com/bigscience-workshop) (Alexander Borzunov, Max Ryabinin, et al.). IMO's pipeline parallelism architecture — BlockServer, RemoteSequential, DHT-based block routing, and fault-tolerant rerouting — is directly inspired by Petals' elegant design for splitting transformer blocks across consumer GPUs. Paper: *[Petals: Collaborative Inference and Fine-tuning of Large Models](https://arxiv.org/abs/2209.01188)*.
 
-We are deeply grateful to these teams for open-sourcing their work and making decentralized AI training a reality.
+IMO's pluggable training toolkit system is powered by these outstanding open-source projects:
+
+- **[Transformers](https://github.com/huggingface/transformers)** & **[Diffusers](https://github.com/huggingface/diffusers)** — by [Hugging Face](https://github.com/huggingface). The Trainer API and diffusion training pipelines serve as IMO's default backends for LLM/classification and image/video generation respectively.
+
+- **[Unsloth](https://github.com/unslothai/unsloth)** — by [Daniel & Michael Han](https://github.com/unslothai). Dramatically faster and more memory-efficient LoRA/QLoRA fine-tuning, enabling 70% less VRAM usage on consumer GPUs.
+
+- **[Axolotl](https://github.com/axolotl-ai-cloud/axolotl)** — by [Wing Lian](https://github.com/winglian) and the [OpenAccess AI Collective](https://github.com/axolotl-ai-cloud). Config-driven training with built-in DPO/RLHF support, covering all 7 training modes.
+
+- **[Musubi-Tuner](https://github.com/kohya-ss/musubi-tuner)** — by [kohya-ss](https://github.com/kohya-ss). Fine-tuning toolkit for Wan2.1 video generation models.
+
+- **[AI-Toolkit](https://github.com/ostris/ai-toolkit)** — by [Ostris](https://github.com/ostris). Flux/Stable Diffusion LoRA and DreamBooth training for image generation.
+
+We are deeply grateful to all these teams for open-sourcing their work and making decentralized AI training a reality.
 
 ---
 

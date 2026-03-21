@@ -111,17 +111,17 @@ Built-in denoising diffusion training loop with:
 │ Privacy    │ Rewards  │  │                      │  │ Gradient       │
 │ Provenance │ Registry │  │  load_model()        │  │ Compression    │
 │ Aggregator │ IMO      │  │  compute_loss()      │  │                │
-│            │          │  │  create_optimizer()   │  │                │
+│            │          │  │  create_optimizer()  │  │                │
 │            │          │  └───────────┬──────────┘  │                │
-│            │          │              │              │                │
+│            │          │              │             │                │
 │            │          │  ┌───────────▼──────────┐  │                │
-│            │          │  │   Training Engine     │  │                │
-│            │          │  │                       │  │                │
-│            │          │  │   Hivemind DHT        │◄─┤                │
-│            │          │  │   Pipeline Parallel   │  │                │
-│            │          │  │   Byzantine Aggreg    │  │                │
-│            │          │  │   Checkpointing       │  │                │
-│            │          │  └───────────────────────┘  │                │
+│            │          │  │   Training Engine    │  │                │
+│            │          │  │                      │  │                │
+│            │          │  │   Hivemind DHT       │◄─┤                │
+│            │          │  │   Pipeline Parallel  │  │                │
+│            │          │  │   Byzantine Aggreg   │  │                │
+│            │          │  │   Checkpointing      │  │                │
+│            │          │  └──────────────────────┘  │                │
 ├────────────┴──────────┼────────────────────────────┼────────────────┤
 │   Smart Contracts     │          PyTorch           │  Hivemind DHT  │
 │ (IMOToken, Governance)│       + HF Ecosystem       │                │
@@ -142,16 +142,16 @@ The core design insight: **Toolkits know how to load models and compute loss. Th
 │    - From-scratch init           across nodes via BlockServer   │
 │                                                                 │
 │ 2. compute_loss()        ──►  Called inside training loop       │
-│    - Causal LM loss            - Gradients compressed (Top-K)  │
-│    - Diffusion denoising       - All-reduce via Hivemind       │
-│    - Distillation KL           - Byzantine aggregation         │
+│    - Causal LM loss            - Gradients compressed (Top-K)   │
+│    - Diffusion denoising       - All-reduce via Hivemind        │
+│    - Distillation KL           - Byzantine aggregation          │
 │                                                                 │
 │ 3. create_optimizer()    ──►  Wrapped by Hivemind.Optimizer     │
-│    - AdamW, SGD, fused         - Decentralized step syncing    │
+│    - AdamW, SGD, fused         - Decentralized step syncing     │
 │                                                                 │
 │ 4. post_training()       ◄──  Called after training completes   │
-│    - Merge LoRA weights        - Final checkpoint saved        │
-│    - Export safetensors        - Contributions recorded        │
+│    - Merge LoRA weights        - Final checkpoint saved         │
+│    - Export safetensors        - Contributions recorded         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

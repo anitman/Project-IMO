@@ -48,11 +48,11 @@
 
 **7. Reward** — Quality score maps to a multiplier (0x–2x). Adjusted reward pool splits:
 
-| Pool | Share | Recipients |
-|------|-------|------------|
-| Compute | 50% | GPU nodes, proportional to `time × Δloss × VRAM_ratio` |
-| Data | 40% | Dataset contributors, proportional to `samples × quality × uniqueness` |
-| Paper | 10% | Authors of the original research paper |
+| Pool    | Share | Recipients                                                    |
+|---------|-------|---------------------------------------------------------------|
+| Compute | 50%   | GPU nodes, proportional to `time * delta_loss * VRAM_ratio`  |
+| Data    | 40%   | Dataset contributors, proportional to `samples * quality * uniqueness` |
+| Paper   | 10%   | Authors of the original research paper                        |
 
 Poor models (score < 50) get **zero** rewards. Breakthrough models (score ≥ 95) get **2x** the base pool. This is by design: IMO incentivizes frontier-quality open-source models, not reward farming.
 
@@ -62,26 +62,29 @@ Poor models (score < 50) get **zero** rewards. Breakthrough models (score ≥ 95
 
 IMO supports **30+ model categories** across every major modality:
 
-| Modality | Categories |
-|----------|------------|
-| **Language** | LLM (pretraining), Chat/Instruct, Code |
-| **Vision** | Classification, Detection, Segmentation, Generation (Stable Diffusion, etc.) |
-| **Audio** | Speech Recognition, Text-to-Speech, Classification, Sound Generation |
-| **Video** | Classification, Understanding, Generation (Sora-class) |
-| **Multimodal** | Vision-Language, Audio-Language, Video-Language |
-| **Embedding** | Text, Image, Multimodal (CLIP-class) |
-| **Other** | Time-series Forecasting, Recommendation |
+| Modality       | Categories                                                      |
+|----------------|-----------------------------------------------------------------|
+| **Language**   | LLM (pretraining), Chat/Instruct, Code                         |
+| **Vision**     | Classification, Detection, Segmentation, Generation (SD, etc.) |
+| **Audio**      | Speech Recognition, Text-to-Speech, Classification, Generation |
+| **Video**      | Classification, Understanding, Generation (Sora-class)         |
+| **Multimodal** | Vision-Language, Audio-Language, Video-Language                  |
+| **Embedding**  | Text, Image, Multimodal (CLIP-class)                            |
+| **Other**      | Time-series Forecasting, Recommendation                         |
 
 Each category has specific dataset requirements (data types, minimum samples, accepted formats) enforced by the data linter.
 
 ### Training Modes
 
-| Mode | Description |
-|------|-------------|
-| `from_scratch` | Train a new architecture from random init |
-| `full_fine_tune` | Full fine-tuning of a pretrained model |
-| `lora` | Low-Rank Adaptation |
-| `qlora` | Quantized LoRA |
+| Mode               | Description                              |
+|--------------------|------------------------------------------|
+| `from_scratch`     | Train a new architecture from random init|
+| `full_fine_tune`   | Full fine-tuning of a pretrained model   |
+| `lora`             | Low-Rank Adaptation                      |
+| `qlora`            | Quantized LoRA                           |
+| `continual_pretrain`| Continue pretraining on new data        |
+| `distillation`     | Knowledge distillation from teacher model|
+| `hybrid`           | Combined approaches                      |
 
 ### Diffusion Model Support
 
@@ -96,33 +99,33 @@ Built-in denoising diffusion training loop with:
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                         CLI  (imo)                                │
-│         Interactive Dashboard / Project Wizard / Rich UI          │
-├────────────┬──────────┬───────────────────────┬──────────────────┤
-│    Data    │ Protocol │   Training Pipeline   │      Node        │
-│   Layer    │  Layer   │                       │     Layer        │
-├────────────┼──────────┤  ┌─────────────────┐  ├──────────────────┤
-│ Linter     │ Project  │  │    Toolkits      │  │ DHT Discovery   │
-│ Security   │ Voting   │  │  (pluggable)     │  │ VRAM Scheduler  │
-│ Privacy    │ Rewards  │  │                  │  │ Gradient        │
-│ Provenance │ Registry │  │ load_model()     │  │ Compression     │
-│ Aggregator │ IMO      │  │ compute_loss()   │  │                 │
-│            │          │  │ create_optimizer()│  │                 │
-│            │          │  └────────┬─────────┘  │                 │
-│            │          │           │             │                 │
-│            │          │  ┌────────▼─────────┐  │                 │
-│            │          │  │ Training Engine   │  │                 │
-│            │          │  │                   │  │                 │
-│            │          │  │ Hivemind DHT      │◄─┤                 │
-│            │          │  │ Pipeline Parallel │  │                 │
-│            │          │  │ Byzantine Aggreg  │  │                 │
-│            │          │  │ Checkpointing     │  │                 │
-│            │          │  └───────────────────┘  │                 │
-├────────────┴──────────┼─────────────────────────┼─────────────────┤
-│   Smart Contracts     │        PyTorch          │  Hivemind DHT   │
-│ (IMOToken, Governance)│     + HF Ecosystem      │                 │
-└───────────────────────┴─────────────────────────┴─────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                            CLI  (imo)                               │
+│          Interactive Dashboard / Project Wizard / Rich UI           │
+├────────────┬──────────┬────────────────────────────┬────────────────┤
+│    Data    │ Protocol │     Training Pipeline      │     Node       │
+│   Layer    │  Layer   │                            │     Layer      │
+├────────────┼──────────┤  ┌──────────────────────┐  ├────────────────┤
+│ Linter     │ Project  │  │      Toolkits        │  │ DHT Discovery  │
+│ Security   │ Voting   │  │    (pluggable)       │  │ VRAM Scheduler │
+│ Privacy    │ Rewards  │  │                      │  │ Gradient       │
+│ Provenance │ Registry │  │  load_model()        │  │ Compression    │
+│ Aggregator │ IMO      │  │  compute_loss()      │  │                │
+│            │          │  │  create_optimizer()   │  │                │
+│            │          │  └───────────┬──────────┘  │                │
+│            │          │              │              │                │
+│            │          │  ┌───────────▼──────────┐  │                │
+│            │          │  │   Training Engine     │  │                │
+│            │          │  │                       │  │                │
+│            │          │  │   Hivemind DHT        │◄─┤                │
+│            │          │  │   Pipeline Parallel   │  │                │
+│            │          │  │   Byzantine Aggreg    │  │                │
+│            │          │  │   Checkpointing       │  │                │
+│            │          │  └───────────────────────┘  │                │
+├────────────┴──────────┼────────────────────────────┼────────────────┤
+│   Smart Contracts     │          PyTorch           │  Hivemind DHT  │
+│ (IMOToken, Governance)│       + HF Ecosystem       │                │
+└───────────────────────┴────────────────────────────┴────────────────┘
 ```
 
 ### Training Pipeline — How Toolkits and Engine Work Together
@@ -154,21 +157,24 @@ The core design insight: **Toolkits know how to load models and compute loss. Th
 
 ### Parallelism Modes
 
-| Mode | How it works | When to use |
-|------|-------------|-------------|
-| **Data Parallel** (default) | Each node holds the full model. Forward/backward runs locally. Gradients compressed (Top-K sparsification) and averaged across all nodes via Hivemind. | Model fits on a single GPU (most LoRA, small-to-mid models) |
-| **Pipeline Parallel** | Model layers are split across nodes. Each node hosts a consecutive block range via `BlockServer`. Activations flow through a chain of `RemoteBlock`s wrapped in `RemoteSequential`. DHT-based routing with fault-tolerant rerouting. | Model too large for one GPU (70B+ params) |
+| Mode                        | Mechanism                                      | When to Use                        |
+|-----------------------------|-------------------------------------------------|------------------------------------|
+| **Data Parallel** (default) | Full model on each node; gradients compressed   | Model fits on one GPU              |
+|                             | (Top-K) and averaged via Hivemind               | (most LoRA, small-to-mid models)   |
+| **Pipeline Parallel**       | Model split by layers across nodes via          | Model too large for one GPU        |
+|                             | `BlockServer`/`RemoteSequential`; DHT routing   | (70B+ params)                      |
+|                             | with fault-tolerant rerouting                   |                                    |
 
 ### Built-in Toolkits (`src/imo/toolkits/`)
 
-| Toolkit | Best for | Modes | Min VRAM |
-|---------|----------|-------|----------|
-| **HF Trainer** (default) | Universal LLM/classification training | all 6 modes | 8 GB |
-| **Unsloth** | Fast LoRA/QLoRA, 70% less memory | LoRA, QLoRA, fine-tune | 6 GB |
-| **Axolotl** | YAML-driven, DPO/RLHF built-in | from_scratch, fine-tune, LoRA, QLoRA | 8 GB |
-| **Diffusers** | SD/SDXL/Flux/audio/video diffusion | from_scratch, fine-tune, LoRA | 8 GB |
-| **Musubi-Tuner** | Wan2.1 video generation | fine-tune, LoRA | 12 GB |
-| **AI-Toolkit** | Flux/SD image LoRA/DreamBooth | fine-tune, LoRA | 12 GB |
+| Toolkit              | Best For                          | Modes                              | Min VRAM |
+|----------------------|-----------------------------------|------------------------------------|----------|
+| **HF Trainer** (default) | Universal LLM/classification  | all 7 modes                        | 8 GB     |
+| **Unsloth**          | Fast LoRA/QLoRA, 70% less memory  | LoRA, QLoRA, fine-tune             | 6 GB     |
+| **Axolotl**          | YAML-driven, DPO/RLHF built-in   | all 7 modes                        | 8 GB     |
+| **Diffusers**        | SD/SDXL/Flux diffusion            | from_scratch, fine-tune, LoRA      | 8 GB     |
+| **Musubi-Tuner**     | Wan2.1 video generation           | fine-tune, LoRA                    | 12 GB    |
+| **AI-Toolkit**       | Flux/SD image LoRA/DreamBooth     | fine-tune, LoRA                    | 12 GB    |
 
 All toolkits plug into the same `DistributedTrainingEngine`. The engine handles Hivemind DHT, layer splitting, gradient aggregation, and Byzantine fault tolerance — regardless of which toolkit loaded the model.
 
@@ -314,25 +320,25 @@ print(f"Contributors: {project.num_data_contributors}")
 
 ## Tokenomics
 
-| Allocation        | Share | Vesting                              |
-|-------------------|-------|--------------------------------------|
-| Community Rewards | 40%   | Distributed per-IMO based on quality |
-| Treasury          | 20%   | Protocol development                 |
-| Team              | 15%   | 4-year linear vesting                |
-| Investors         | 15%   | 6-month lockup                       |
-| Ecosystem         | 10%   | Grants, partnerships                 |
+| Allocation          | Share | Vesting                                |
+|---------------------|-------|----------------------------------------|
+| Community Rewards   | 40%   | Distributed per-IMO based on quality   |
+| Treasury            | 20%   | Protocol development                   |
+| Team                | 15%   | 4-year linear vesting                  |
+| Investors           | 15%   | 6-month lockup                         |
+| Ecosystem           | 10%   | Grants, partnerships                   |
 
 **Total Supply: 1,000,000,000 $IMO**
 
 ### Quality Multipliers
 
-| Score  | Level        | Multiplier | Effect               |
-|--------|--------------|------------|----------------------|
-| 95–100 | Breakthrough | 2.0x       | Double the base pool |
-| 85–94  | Excellent    | 1.5x       |                      |
-| 70–84  | Good         | 1.0x       | Base pool            |
-| 50–69  | Fair         | 0.5x       |                      |
-| < 50   | Poor         | 0.0x       | No rewards           |
+| Score    | Level        | Multiplier | Effect                 |
+|----------|--------------|------------|------------------------|
+| 95 - 100 | Breakthrough | 2.0x       | Double the base pool   |
+| 85 - 94  | Excellent    | 1.5x       |                        |
+| 70 - 84  | Good         | 1.0x       | Base pool              |
+| 50 - 69  | Fair         | 0.5x       |                        |
+| < 50     | Poor         | 0.0x       | No rewards             |
 
 ---
 
@@ -350,17 +356,17 @@ pytest --cov=imo --cov-report=term-missing       # coverage
 
 ### Key Dependencies
 
-| Package        | Purpose                                         |
-|----------------|-------------------------------------------------|
-| `hivemind`     | Decentralized training, DHT, gradient averaging |
-| `torch`        | Deep learning framework                         |
-| `transformers` | Model architectures and tokenizers              |
-| `datasets`     | Dataset loading and processing                  |
-| `opacus`       | Differential privacy for PyTorch                |
-| `web3`         | Ethereum smart contract interaction             |
-| `pydantic`     | Data validation                                 |
-| `click`        | CLI framework                                   |
-| `rich`         | Terminal UI (tables, colors, progress)           |
+| Package          | Purpose                                           |
+|------------------|---------------------------------------------------|
+| `hivemind`       | Decentralized training, DHT, gradient averaging   |
+| `torch`          | Deep learning framework                           |
+| `transformers`   | Model architectures and tokenizers                |
+| `datasets`       | Dataset loading and processing                    |
+| `opacus`         | Differential privacy for PyTorch                  |
+| `web3`           | Ethereum smart contract interaction               |
+| `pydantic`       | Data validation                                   |
+| `click`          | CLI framework                                     |
+| `rich`           | Terminal UI (tables, colors, progress)             |
 
 ---
 

@@ -96,34 +96,93 @@ Built-in denoising diffusion training loop with:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    CLI  (imo)                           │
-├──────────┬──────────┬──────────────┬────────────────────┤
-│   Data   │ Protocol │   Training   │       Node         │
-│  Layer   │  Layer   │    Engine    │      Layer         │
-├──────────┼──────────┼──────────────┼────────────────────┤
-│ Linter   │ Project  │ Hivemind     │ DHT Discovery      │
-│ Security │ Voting   │ Optimizer    │ VRAM Scheduler     │
-│ Privacy  │ Rewards  │ Pipeline     │ Gradient           │
-│ Provnce  │ Registry │ Checkpoint   │ Compression        │
-│ Aggregtr │ IMO      │ Diffusion    │ Communicator       │
-├──────────┴──────────┼──────────────┼────────────────────┤
-│   Smart Contracts   │   PyTorch    │    Hivemind DHT    │
-│ (IMOToken, Gov)     │ + HF         │                    │
-└─────────────────────┴──────────────┴────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         CLI  (imo)                                │
+│         Interactive Dashboard / Project Wizard / Rich UI          │
+├────────────┬──────────┬───────────────────────┬──────────────────┤
+│    Data    │ Protocol │   Training Pipeline   │      Node        │
+│   Layer    │  Layer   │                       │     Layer        │
+├────────────┼──────────┤  ┌─────────────────┐  ├──────────────────┤
+│ Linter     │ Project  │  │    Toolkits      │  │ DHT Discovery   │
+│ Security   │ Voting   │  │  (pluggable)     │  │ VRAM Scheduler  │
+│ Privacy    │ Rewards  │  │                  │  │ Gradient        │
+│ Provenance │ Registry │  │ load_model()     │  │ Compression     │
+│ Aggregator │ IMO      │  │ compute_loss()   │  │                 │
+│            │          │  │ create_optimizer()│  │                 │
+│            │          │  └────────┬─────────┘  │                 │
+│            │          │           │             │                 │
+│            │          │  ┌────────▼─────────┐  │                 │
+│            │          │  │ Training Engine   │  │                 │
+│            │          │  │                   │  │                 │
+│            │          │  │ Hivemind DHT      │◄─┤                 │
+│            │          │  │ Pipeline Parallel │  │                 │
+│            │          │  │ Byzantine Aggreg  │  │                 │
+│            │          │  │ Checkpointing     │  │                 │
+│            │          │  └───────────────────┘  │                 │
+├────────────┴──────────┼─────────────────────────┼─────────────────┤
+│   Smart Contracts     │        PyTorch          │  Hivemind DHT   │
+│ (IMOToken, Governance)│     + HF Ecosystem      │                 │
+└───────────────────────┴─────────────────────────┴─────────────────┘
 ```
 
-### Layer 1 — Node (`src/imo/node/`)
-Peer-to-peer networking. Discovers peers via Hivemind DHT, schedules model layers across heterogeneous VRAM, compresses gradients for bandwidth efficiency.
+### Training Pipeline — How Toolkits and Engine Work Together
 
-### Layer 2 — Training Engine (`src/imo/training/`)
-`DistributedTrainingEngine` orchestrates the full loop: hivemind optimizer setup, forward/backward, gradient compression/averaging, Byzantine-robust aggregation, poisoning detection, checkpointing. Supports both standard autoregressive and diffusion training objectives.
+The core design insight: **Toolkits know how to load models and compute loss. The Engine knows how to distribute training across a GPU swarm.** They're separated so that any training backend (HF Trainer, Unsloth, Diffusers, etc.) can run on a decentralized Hivemind network without modification.
 
-### Layer 3 — Protocol (`src/imo/protocol/`)
-`Project` is the central coordination unit. Lifecycle: draft → open_for_data → voting → approved → training → evaluating → completed. Tracks dataset contributions, compute contributions, and paper authorship. Calculates quality-adjusted rewards.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Toolkit (pluggable)           Engine (distributed)              │
+│                                                                 │
+│ 1. load_model()          ──►  Receives nn.Module                │
+│    - HF pretrained             - Data parallel: replicate model │
+│    - LoRA/QLoRA wrap           - Pipeline parallel: split layers│
+│    - From-scratch init           across nodes via BlockServer   │
+│                                                                 │
+│ 2. compute_loss()        ──►  Called inside training loop       │
+│    - Causal LM loss            - Gradients compressed (Top-K)  │
+│    - Diffusion denoising       - All-reduce via Hivemind       │
+│    - Distillation KL           - Byzantine aggregation         │
+│                                                                 │
+│ 3. create_optimizer()    ──►  Wrapped by Hivemind.Optimizer     │
+│    - AdamW, SGD, fused         - Decentralized step syncing    │
+│                                                                 │
+│ 4. post_training()       ◄──  Called after training completes   │
+│    - Merge LoRA weights        - Final checkpoint saved        │
+│    - Export safetensors        - Contributions recorded        │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### Layer 4 — Data (`src/imo/data/`)
-Quality linting, code injection scanning, differential privacy (Gaussian/Laplace noise via Opacus), data provenance tracking, and multi-source dataset aggregation with proportional/balanced sampling.
+### Parallelism Modes
+
+| Mode | How it works | When to use |
+|------|-------------|-------------|
+| **Data Parallel** (default) | Each node holds the full model. Forward/backward runs locally. Gradients compressed (Top-K sparsification) and averaged across all nodes via Hivemind. | Model fits on a single GPU (most LoRA, small-to-mid models) |
+| **Pipeline Parallel** | Model layers are split across nodes. Each node hosts a consecutive block range via `BlockServer`. Activations flow through a chain of `RemoteBlock`s wrapped in `RemoteSequential`. DHT-based routing with fault-tolerant rerouting. | Model too large for one GPU (70B+ params) |
+
+### Built-in Toolkits (`src/imo/toolkits/`)
+
+| Toolkit | Best for | Modes | Min VRAM |
+|---------|----------|-------|----------|
+| **HF Trainer** (default) | Universal LLM/classification training | all 6 modes | 8 GB |
+| **Unsloth** | Fast LoRA/QLoRA, 70% less memory | LoRA, QLoRA, fine-tune | 6 GB |
+| **Axolotl** | YAML-driven, DPO/RLHF built-in | from_scratch, fine-tune, LoRA, QLoRA | 8 GB |
+| **Diffusers** | SD/SDXL/Flux/audio/video diffusion | from_scratch, fine-tune, LoRA | 8 GB |
+| **Musubi-Tuner** | Wan2.1 video generation | fine-tune, LoRA | 12 GB |
+| **AI-Toolkit** | Flux/SD image LoRA/DreamBooth | fine-tune, LoRA | 12 GB |
+
+All toolkits plug into the same `DistributedTrainingEngine`. The engine handles Hivemind DHT, layer splitting, gradient aggregation, and Byzantine fault tolerance — regardless of which toolkit loaded the model.
+
+### Node Layer (`src/imo/node/`)
+Peer-to-peer networking. Discovers peers via Hivemind DHT, schedules model layers across heterogeneous VRAM (bin-packing), compresses gradients (Top-K sparsification, sign encoding) for bandwidth efficiency.
+
+### Training Engine (`src/imo/training/`)
+`DistributedTrainingEngine` orchestrates the full distributed loop. Accepts a `TrainingToolkit` for model loading and loss computation. Handles: Hivemind optimizer setup, pipeline parallelism (`BlockServer` / `RemoteSequential`), gradient compression/averaging, Byzantine-robust aggregation (trimmed mean / Krum), poisoning detection, checkpointing. Factory method: `DistributedTrainingEngine.from_toolkit(config, toolkit, spec)`.
+
+### Protocol Layer (`src/imo/protocol/`)
+`Project` is the central coordination unit. Lifecycle: draft → open_for_data → voting → approved → training → evaluating → completed. 7 training modes: from_scratch, full_fine_tune, LoRA, QLoRA, continual_pretrain, distillation, hybrid. Tracks dataset and compute contributions. Quality-adjusted reward distribution (40% data / 50% compute / 10% paper).
+
+### Data Layer (`src/imo/data/`)
+Quality linting, code injection scanning (AST-level, multi-language), differential privacy (Gaussian/Laplace noise via Opacus), data provenance tracking (SHA-256 hashing), and multi-source dataset aggregation with proportional/balanced sampling.
 
 ### Smart Contracts (`contracts/`)
 - **IMOToken.sol** — ERC-20 with quality-based reward distribution. Tracks contributor scores on-chain, proportional reward claims per pool (data/compute/paper).
@@ -171,11 +230,30 @@ imo project contribute <project-id> my_dataset.parquet --license apache-2.0
 ### Join Training
 
 ```bash
-# Start/join distributed training
+# Start/join distributed training (data parallel — default)
 imo train start <project-id> \
   --peers /ip4/203.0.113.1/tcp/12345/p2p/QmPeer1 \
   --batch-size 32 \
   --lr 1e-4
+
+# Pipeline parallel — split model layers across GPU nodes
+# Required for models too large for a single GPU
+imo train start <project-id> \
+  --parallelism pipeline_parallel \
+  --peers /ip4/203.0.113.1/tcp/12345/p2p/QmPeer1
+```
+
+### Manage Toolkits
+
+```bash
+# List all available training backends
+imo toolkit list
+
+# Show details and check environment readiness
+imo toolkit info hf_trainer
+
+# Install a toolkit's dependencies
+imo toolkit install unsloth
 ```
 
 ### Check Node Status
@@ -275,13 +353,14 @@ pytest --cov=imo --cov-report=term-missing       # coverage
 | Package        | Purpose                                         |
 |----------------|-------------------------------------------------|
 | `hivemind`     | Decentralized training, DHT, gradient averaging |
-| `torch`        | Deep learning framework                         | 
+| `torch`        | Deep learning framework                         |
 | `transformers` | Model architectures and tokenizers              |
 | `datasets`     | Dataset loading and processing                  |
 | `opacus`       | Differential privacy for PyTorch                |
 | `web3`         | Ethereum smart contract interaction             |
 | `pydantic`     | Data validation                                 |
 | `click`        | CLI framework                                   |
+| `rich`         | Terminal UI (tables, colors, progress)           |
 
 ---
 

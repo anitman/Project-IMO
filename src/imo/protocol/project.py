@@ -42,6 +42,9 @@ class TrainingMode(Enum):
     FULL_FINE_TUNE = "full_fine_tune"
     LORA = "lora"
     QLORA = "qlora"
+    CONTINUAL_PRETRAIN = "continual_pretrain"
+    DISTILLATION = "distillation"
+    HYBRID = "hybrid"
 
 
 @dataclass
@@ -91,6 +94,13 @@ class ComputeContribution:
     )
 
 
+class PaperSource(Enum):
+    """Where the project's research paper comes from."""
+
+    UPLOAD = "upload"
+    ARXIV = "arxiv"
+
+
 @dataclass
 class ProjectSpec:
     """Specification of what the project aims to train."""
@@ -105,6 +115,18 @@ class ProjectSpec:
     required_data_types: list[str] = field(default_factory=list)
     min_dataset_samples: int = 0
     min_dataset_quality: float = 0.7
+
+    # Paper source
+    paper_source: PaperSource = PaperSource.UPLOAD
+    arxiv_id: str | None = None  # e.g. "2401.12345"
+
+    # Distillation / hybrid training
+    teacher_model: str | None = None  # For distillation: HF model ID
+    merge_models: list[str] = field(default_factory=list)  # For hybrid/merge training
+
+    # Toolkit
+    toolkit: str = "hf_trainer"  # Name of the training toolkit to use
+    project_dir: str | None = None  # Custom project directory path
 
 
 @dataclass

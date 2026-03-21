@@ -119,18 +119,27 @@ class DistributedTrainingEngine:
     Uses hivemind for decentralized gradient averaging, with Byzantine-robust
     aggregation and gradient compression for bandwidth efficiency.
 
+    The engine delegates model loading, loss computation, and optimizer
+    creation to a TrainingToolkit (pluggable adapter). The engine handles
+    everything else: Hivemind DHT setup, pipeline parallelism (splitting
+    model layers across nodes), gradient compression, Byzantine-robust
+    aggregation, checkpointing, and contribution tracking.
+
     Lifecycle:
-        1. Initialize model + optimizer
+        1. Toolkit loads model → Engine receives nn.Module
         2. Discover peers via DHT
-        3. Schedule layers across peers by VRAM
+        3. Schedule layers across peers by VRAM (pipeline parallelism)
+           OR replicate full model (data parallelism)
         4. Run collaborative training loop:
-           a. Local forward/backward pass
-           b. Compress gradients (Top-K / SignSGD)
-           c. All-reduce via hivemind.Optimizer
-           d. Verify gradient integrity
-           e. Apply aggregated update
+           a. Toolkit computes loss (local forward)
+           b. Engine handles backward pass
+           c. Compress gradients (Top-K / SignSGD)
+           d. All-reduce via hivemind.Optimizer
+           e. Verify gradient integrity (Byzantine detection)
+           f. Apply aggregated update
         5. Checkpoint periodically
         6. Report contributions for reward settlement
+        7. Toolkit runs post-training (LoRA merge, export)
     """
 
     def __init__(
@@ -139,21 +148,31 @@ class DistributedTrainingEngine:
         model: nn.Module,
         optimizer: torch.optim.Optimizer | None = None,
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+        toolkit: Any | None = None,
     ):
         self.config = config
         self.model = model
+        self.toolkit = toolkit
         self.status = TrainingStatus.INITIALIZING
         self.metrics = TrainingMetrics()
 
-        # Optimizer
-        if optimizer is None:
+        # Optimizer — prefer toolkit-created, then explicit, then default
+        if optimizer is not None:
+            self.optimizer = optimizer
+        elif toolkit is not None:
+            self.optimizer, self.scheduler = toolkit.create_optimizer(
+                model, {"learning_rate": config.learning_rate,
+                        "weight_decay": config.weight_decay,
+                        "warmup_steps": config.warmup_steps,
+                        "max_steps": config.max_steps}
+            )
+            scheduler = self.scheduler  # capture for later
+        else:
             self.optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=config.learning_rate,
                 weight_decay=config.weight_decay,
             )
-        else:
-            self.optimizer = optimizer
 
         self.scheduler = scheduler
 
@@ -180,6 +199,27 @@ class DistributedTrainingEngine:
         # Tracking
         self._step = 0
         self._contributions: dict[str, dict[str, float]] = {}
+
+    @classmethod
+    def from_toolkit(
+        cls,
+        config: TrainingConfig,
+        toolkit: Any,
+        spec: dict[str, Any],
+    ) -> DistributedTrainingEngine:
+        """Create an engine from a TrainingToolkit.
+
+        The toolkit handles model loading and optimizer creation;
+        the engine handles everything distributed (DHT, pipeline
+        parallelism, gradient aggregation).
+
+        Args:
+            config: Training configuration.
+            toolkit: A TrainingToolkit adapter instance.
+            spec: Project spec dict passed to toolkit.load_model() etc.
+        """
+        model = toolkit.load_model(spec)
+        return cls(config=config, model=model, toolkit=toolkit)
 
     def _build_aggregation_strategy(self) -> AggregationStrategy:
         """Build aggregation strategy from config."""
@@ -250,14 +290,20 @@ class DistributedTrainingEngine:
     ) -> TrainingMetrics:
         """Execute one training step with gradient averaging.
 
-        For standard models: forward → loss → backward → hivemind step.
-        For diffusion models: sample noise → predict → loss → backward → hivemind step.
+        Loss computation priority:
+          1. Pipeline parallelism path (activations routed across nodes)
+          2. Toolkit.compute_loss() (if a toolkit is attached)
+          3. Diffusion forward (if config.is_diffusion)
+          4. Standard forward (HF-style model(**batch).loss)
+          5. Explicit loss_fn parameter (legacy fallback)
         """
         self.status = TrainingStatus.TRAINING
         self.model.train()
 
         if self.config.parallelism_mode == "pipeline_parallel" and self.remote_sequential is not None:
             loss = self._pipeline_forward(batch, loss_fn)
+        elif self.toolkit is not None:
+            loss = self.toolkit.compute_loss(self.model, batch)
         elif self.config.is_diffusion:
             loss = self._diffusion_forward(batch, loss_fn)
         else:
@@ -436,10 +482,16 @@ class DistributedTrainingEngine:
         """Get all recorded contributions."""
         return dict(self._contributions)
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, project_dir: str | None = None) -> None:
         """Gracefully shut down the training engine."""
         logger.info("Shutting down training engine at step %d", self._step)
         await self._save_checkpoint()
+
+        # Toolkit post-processing (LoRA merge, export, etc.)
+        if self.toolkit is not None and project_dir is not None:
+            from pathlib import Path
+
+            self.toolkit.post_training(self.model, Path(project_dir))
 
         if self.hivemind_optimizer is not None:
             self.hivemind_optimizer.shutdown()

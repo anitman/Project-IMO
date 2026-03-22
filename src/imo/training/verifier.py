@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import random
 from dataclasses import dataclass
 from typing import TypeAlias
 
 import torch
 
 Gradients: TypeAlias = dict[str, torch.Tensor]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -174,3 +178,161 @@ class GradientAnomalyDetector:
                 return True
 
         return False
+
+
+@dataclass
+class SpotCheckResult:
+    """Result of a redundant computation spot-check."""
+
+    batch_id: str
+    nodes_checked: list[str]
+    is_consistent: bool
+    max_divergence: float
+    flagged_nodes: list[str]
+    message: str
+
+
+class RedundantVerifier:
+    """Folding@home-inspired redundant computation spot-checking.
+
+    Randomly selects a fraction of training batches to be independently
+    computed by multiple nodes. Results are compared — if a node's output
+    diverges significantly from the majority, it is flagged as dishonest.
+
+    This catches nodes that:
+    - Submit fabricated gradients without actually computing them
+    - Intentionally corrupt gradients (targeted poisoning)
+    - Have hardware faults producing silent data corruption
+
+    The key insight: you don't need to verify EVERY batch. Even a small
+    spot-check rate (e.g. 5%) makes cheating risky, because a dishonest
+    node never knows which batches are being verified.
+    """
+
+    def __init__(
+        self,
+        spot_check_rate: float = 0.05,
+        divergence_threshold: float = 0.1,
+        min_verifiers: int = 2,
+        strike_limit: int = 3,
+    ):
+        if not 0 < spot_check_rate <= 1.0:
+            raise ValueError("spot_check_rate must be in (0, 1]")
+        self.spot_check_rate = spot_check_rate
+        self.divergence_threshold = divergence_threshold
+        self.min_verifiers = min_verifiers
+        self.strike_limit = strike_limit
+        self.strikes: dict[str, int] = {}
+        self.check_history: list[SpotCheckResult] = []
+
+    def should_spot_check(self, step: int) -> bool:
+        """Decide whether this step should be spot-checked.
+
+        Uses deterministic randomness seeded by step to ensure all nodes
+        agree on which steps are checked without extra communication.
+        """
+        rng = random.Random(step * 31337)
+        return rng.random() < self.spot_check_rate
+
+    def select_verifiers(
+        self,
+        step: int,
+        available_nodes: list[str],
+        primary_node: str,
+    ) -> list[str]:
+        """Select which nodes should redundantly compute this batch.
+
+        Excludes the primary node. Selection is deterministic from step
+        so all participants agree without a coordination round.
+        """
+        candidates = [n for n in available_nodes if n != primary_node]
+        if len(candidates) < self.min_verifiers:
+            return candidates
+
+        rng = random.Random(step * 31337 + 7)
+        return rng.sample(candidates, min(self.min_verifiers, len(candidates)))
+
+    def verify_results(
+        self,
+        batch_id: str,
+        results: dict[str, Gradients],
+    ) -> SpotCheckResult:
+        """Compare redundantly computed results and flag divergent nodes.
+
+        Uses majority-vote: compute pairwise cosine similarities, find the
+        majority cluster, and flag nodes outside it.
+        """
+        node_ids = list(results.keys())
+
+        if len(node_ids) < 2:
+            return SpotCheckResult(
+                batch_id=batch_id,
+                nodes_checked=node_ids,
+                is_consistent=True,
+                max_divergence=0.0,
+                flagged_nodes=[],
+                message="Not enough nodes for comparison",
+            )
+
+        # Flatten each node's gradients
+        flat: dict[str, torch.Tensor] = {}
+        for nid, grads in results.items():
+            tensors = [grads[k].flatten() for k in sorted(grads.keys())]
+            flat[nid] = torch.cat(tensors) if tensors else torch.tensor(0.0)
+
+        # Compute pairwise cosine similarities
+        similarities: dict[tuple[str, str], float] = {}
+        for i, nid_a in enumerate(node_ids):
+            for nid_b in node_ids[i + 1:]:
+                norm_a = torch.norm(flat[nid_a])
+                norm_b = torch.norm(flat[nid_b])
+                if norm_a == 0 or norm_b == 0:
+                    sim = 0.0
+                else:
+                    sim = (torch.dot(flat[nid_a], flat[nid_b]) / (norm_a * norm_b)).item()
+                similarities[(nid_a, nid_b)] = sim
+
+        # Find majority cluster: node with highest average similarity to others
+        avg_sim: dict[str, float] = {}
+        for nid in node_ids:
+            sims = []
+            for (a, b), sim in similarities.items():
+                if a == nid or b == nid:
+                    sims.append(sim)
+            avg_sim[nid] = sum(sims) / len(sims) if sims else 0.0
+
+        # Flag nodes whose average similarity is below threshold
+        flagged: list[str] = []
+        max_divergence = 0.0
+
+        median_sim = sorted(avg_sim.values())[len(avg_sim) // 2] if avg_sim else 1.0
+
+        for nid, sim in avg_sim.items():
+            divergence = max(0.0, median_sim - sim)
+            max_divergence = max(max_divergence, divergence)
+            if divergence > self.divergence_threshold:
+                flagged.append(nid)
+                self.strikes[nid] = self.strikes.get(nid, 0) + 1
+                logger.warning(
+                    "Spot-check: node %s diverged (avg_sim=%.4f, median=%.4f) — strike %d/%d",
+                    nid, sim, median_sim, self.strikes[nid], self.strike_limit,
+                )
+
+        result = SpotCheckResult(
+            batch_id=batch_id,
+            nodes_checked=node_ids,
+            is_consistent=len(flagged) == 0,
+            max_divergence=max_divergence,
+            flagged_nodes=flagged,
+            message=f"Checked {len(node_ids)} nodes, flagged {len(flagged)}",
+        )
+        self.check_history.append(result)
+        return result
+
+    def is_banned(self, node_id: str) -> bool:
+        """Check if a node has exceeded its strike limit."""
+        return self.strikes.get(node_id, 0) >= self.strike_limit
+
+    def get_strikes(self, node_id: str) -> int:
+        """Get current strike count for a node."""
+        return self.strikes.get(node_id, 0)

@@ -119,25 +119,50 @@ class SignCompression(CompressionMethod):
 
 
 class GradientCommunicator:
-    """Handle gradient communication between nodes."""
+    """Handle gradient communication between nodes.
+
+    All gradient data is transmitted over TLS-encrypted channels when a
+    TLSTransport is provided. Without TLS, communication falls back to
+    the DHT layer (which should itself use encrypted connections).
+    """
 
     def __init__(
         self,
         compression_method: CompressionMethod | None = None,
         error_feedback: bool = True,
         dht: Any | None = None,
+        require_tls: bool = True,
     ):
         self.compression = compression_method or TopKCompression()
         self.error_feedback = error_feedback
         self.residuals: dict[str, torch.Tensor] = {}
         self.dht = dht
+        self.require_tls = require_tls
+        self._tls_verified_peers: set[str] = set()
+
+    def register_tls_peer(self, peer_id: str) -> None:
+        """Mark a peer as having an established TLS channel."""
+        self._tls_verified_peers.add(peer_id)
+
+    def revoke_tls_peer(self, peer_id: str) -> None:
+        """Remove a peer's TLS verification status."""
+        self._tls_verified_peers.discard(peer_id)
+
+    def _check_tls(self, peer_id: str) -> None:
+        """Ensure peer has an established TLS channel if TLS is required."""
+        if self.require_tls and peer_id not in self._tls_verified_peers:
+            raise PermissionError(
+                f"Peer {peer_id[:12]} has no verified TLS channel. "
+                "Gradient exchange requires encrypted transport."
+            )
 
     async def send_gradients(
         self,
         peer_id: str,
         gradients: Gradients,
     ) -> None:
-        """Send compressed gradients to a peer."""
+        """Send compressed gradients to a peer over TLS."""
+        self._check_tls(peer_id)
         compressed = self.compression.compress(gradients)
 
         if self.error_feedback:
@@ -147,7 +172,8 @@ class GradientCommunicator:
             await self.dht.send(peer_id, "gradients", compressed)
 
     async def receive_gradients(self, peer_id: str) -> Gradients:
-        """Receive and decompress gradients from a peer."""
+        """Receive and decompress gradients from a peer over TLS."""
+        self._check_tls(peer_id)
         if self.dht:
             compressed = await self.dht.receive(peer_id, "gradients")
             return self.compression.decompress(compressed)

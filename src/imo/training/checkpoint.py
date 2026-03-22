@@ -81,7 +81,7 @@ class CheckpointManager:
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-        checkpoint = torch.load(checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, weights_only=True)
         return {
             "step": step,
             "model_state": checkpoint["model_state"],

@@ -86,41 +86,82 @@ class DifferentialPrivacy:
 
 
 class SecureAggregation:
-    """Secure aggregation for privacy-preserving gradient updates."""
+    """Secure aggregation using pairwise additive masking.
 
-    def __init__(self, num_participants: int, modulus: int = 2**32):
+    Each pair of participants (i, j) shares a random seed. Participant i
+    adds mask_ij and participant j subtracts the same mask_ij. When all
+    masked gradients are summed, the masks cancel out, revealing only
+    the aggregate — no individual gradient is ever exposed.
+
+    This is the standard protocol from Bonawitz et al. (CCS 2017).
+    """
+
+    def __init__(self, num_participants: int):
         self.num_participants = num_participants
-        self.modulus = modulus
 
-    def encrypt(
+    def generate_pairwise_seeds(
+        self,
+        participant_id: int,
+        num_participants: int,
+    ) -> dict[int, int]:
+        """Generate deterministic pairwise seeds.
+
+        In a real deployment, these seeds would be established via
+        Diffie-Hellman key agreement between each pair. Here we
+        use a deterministic function of the pair for reproducibility.
+        """
+        seeds: dict[int, int] = {}
+        for other_id in range(num_participants):
+            if other_id == participant_id:
+                continue
+            # Deterministic seed from the ordered pair
+            lo, hi = min(participant_id, other_id), max(participant_id, other_id)
+            seeds[other_id] = hash((lo, hi)) & 0xFFFFFFFF
+        return seeds
+
+    def mask_gradient(
         self,
         tensor: torch.Tensor,
-        secret_key: int,
+        participant_id: int,
     ) -> torch.Tensor:
-        """Encrypt tensor with secret key."""
-        encrypted = (tensor * secret_key) % self.modulus
-        return encrypted
+        """Apply additive pairwise masks to a gradient tensor.
 
-    def decrypt(
-        self,
-        encrypted_tensor: torch.Tensor,
-        secret_key: int,
-    ) -> torch.Tensor:
-        """Decrypt tensor with secret key."""
-        inverse_key = pow(secret_key, -1, self.modulus)
-        decrypted = (encrypted_tensor * inverse_key) % self.modulus
-        return decrypted
+        For each pair (self, other):
+          - If self < other: add the mask
+          - If self > other: subtract the mask
+        When all participants' masked tensors are summed, masks cancel.
+        """
+        masked = tensor.clone()
+        seeds = self.generate_pairwise_seeds(participant_id, self.num_participants)
 
-    def aggregate_encrypted(
+        for other_id, seed in seeds.items():
+            gen = torch.Generator()
+            gen.manual_seed(seed)
+            mask = torch.randn(tensor.shape, generator=gen, dtype=tensor.dtype)
+
+            if participant_id < other_id:
+                masked = masked + mask
+            else:
+                masked = masked - mask
+
+        return masked
+
+    def aggregate_masked(
         self,
-        encrypted_tensors: list[torch.Tensor],
+        masked_tensors: list[torch.Tensor],
     ) -> torch.Tensor:
-        """Aggregate encrypted tensors without decryption."""
-        if not encrypted_tensors:
+        """Aggregate masked tensors — masks cancel, result is true sum.
+
+        Requires ALL participants to contribute. If a participant drops,
+        the protocol must be restarted with the remaining set.
+        """
+        if not masked_tensors:
             raise ValueError("No tensors to aggregate")
+        if len(masked_tensors) != self.num_participants:
+            raise ValueError(
+                f"Expected {self.num_participants} tensors, got {len(masked_tensors)}. "
+                "All participants must contribute for masks to cancel."
+            )
 
-        aggregated = encrypted_tensors[0]
-        for t in encrypted_tensors[1:]:
-            aggregated = (aggregated + t) % self.modulus
-
+        aggregated = torch.stack(masked_tensors).sum(dim=0)
         return aggregated

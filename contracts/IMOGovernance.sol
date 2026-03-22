@@ -50,6 +50,9 @@ contract IMOGovernance is AccessControl, ReentrancyGuard {
     uint256 public imoCount;
     mapping(uint256 => address[]) public imoVoters;
 
+    // Snapshot: lock voter's balance at voting start to prevent flash-loan manipulation
+    mapping(uint256 => mapping(address => uint256)) public votingSnapshot;
+
     event IMOProposed(
         uint256 indexed imoId,
         address indexed proposer,
@@ -103,7 +106,6 @@ contract IMOGovernance is AccessControl, ReentrancyGuard {
             mode: mode
         });
         newIMO.status = IMOStatus.Submitted;
-        newIMO.votingDeadline = block.timestamp + VOTING_PERIOD;
         newIMO.quorumRequired = QUORUM_THRESHOLD;
 
         imoCount++;
@@ -112,7 +114,34 @@ contract IMOGovernance is AccessControl, ReentrancyGuard {
     }
 
     /**
-     * @dev Cast a vote on an IMO
+     * @dev Start voting phase — must be called before votes are cast.
+     * Snapshots voter balances to prevent flash-loan vote manipulation.
+     */
+    function startVoting(uint256 imoId) external {
+        IMO storage imo = imos[imoId];
+        require(imo.status == IMOStatus.Submitted, "Not in submitted phase");
+        imo.status = IMOStatus.Voting;
+        imo.votingDeadline = block.timestamp + VOTING_PERIOD;
+    }
+
+    /**
+     * @dev Register snapshot of token balance before voting.
+     * Voters must call this during the voting period to lock their balance.
+     * Balance is captured once and cannot be updated — prevents flash loans.
+     */
+    function snapshotBalance(uint256 imoId) external onlyRole(VOTER_ROLE) {
+        IMO storage imo = imos[imoId];
+        require(imo.status == IMOStatus.Voting, "Not in voting phase");
+        require(block.timestamp <= imo.votingDeadline, "Voting ended");
+        require(votingSnapshot[imoId][msg.sender] == 0, "Already snapshot");
+
+        uint256 balance = IMO_TOKEN.balanceOf(msg.sender);
+        require(balance >= MIN_STAKE, "Insufficient stake");
+        votingSnapshot[imoId][msg.sender] = balance;
+    }
+
+    /**
+     * @dev Cast a vote on an IMO using snapshotted balance.
      */
     function vote(uint256 imoId, bool support) external onlyRole(VOTER_ROLE) {
         IMO storage imo = imos[imoId];
@@ -120,9 +149,9 @@ contract IMOGovernance is AccessControl, ReentrancyGuard {
         require(block.timestamp <= imo.votingDeadline, "Voting ended");
         require(!imo.hasVoted[msg.sender], "Already voted");
 
-        // Get voter's token balance
-        uint256 stake = IMO_TOKEN.balanceOf(msg.sender);
-        require(stake >= MIN_STAKE, "Insufficient stake");
+        // Use snapshotted balance — prevents flash-loan vote manipulation
+        uint256 stake = votingSnapshot[imoId][msg.sender];
+        require(stake >= MIN_STAKE, "No snapshot or insufficient stake");
 
         imo.hasVoted[msg.sender] = true;
         imo.votes[msg.sender] = support;

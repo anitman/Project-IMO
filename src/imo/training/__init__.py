@@ -27,12 +27,29 @@ from imo.training.pipeline import (
     build_remote_pipeline,
     create_pipeline_model,
 )
+from imo.training.preflight import (
+    CanaryDetector,
+    ConfigValidator,
+    DatasetQuarantine,
+    ModelIntegrityVerifier,
+    PreflightGate,
+    PreflightReport,
+    SafeModelLoader,
+    WarmupTrustPolicy,
+)
 from imo.training.security import (
     ByzantineRobustAggregator,
     PoisoningDetector,
     SecurityAlert,
+    TrustedRootValidator,
 )
-from imo.training.verifier import GradientAnomalyDetector, GradientVerifier, VerificationResult
+from imo.training.verifier import (
+    GradientAnomalyDetector,
+    GradientVerifier,
+    RedundantVerifier,
+    SpotCheckResult,
+    VerificationResult,
+)
 
 __all__ = [
     "DistributedTrainingEngine",
@@ -63,4 +80,15 @@ __all__ = [
     "PoisoningDetector",
     "SecurityAlert",
     "ByzantineRobustAggregator",
+    "TrustedRootValidator",
+    "RedundantVerifier",
+    "SpotCheckResult",
+    "PreflightGate",
+    "PreflightReport",
+    "SafeModelLoader",
+    "ModelIntegrityVerifier",
+    "ConfigValidator",
+    "DatasetQuarantine",
+    "WarmupTrustPolicy",
+    "CanaryDetector",
 ]

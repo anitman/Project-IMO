@@ -30,6 +30,12 @@ from imo.training.pipeline import (
     RemoteSequential,
     build_remote_pipeline,
 )
+from imo.training.preflight import (
+    CanaryDetector,
+    PreflightGate,
+    PreflightReport,
+    WarmupTrustPolicy,
+)
 from imo.training.security import PoisoningDetector
 from imo.training.verifier import GradientVerifier
 
@@ -192,6 +198,11 @@ class DistributedTrainingEngine:
         )
         self.verifier = GradientVerifier()
 
+        # Pre-flight and runtime security
+        self.warmup_policy = WarmupTrustPolicy()
+        self.canary_detector = CanaryDetector()
+        self.preflight_report: PreflightReport | None = None
+
         # Pipeline parallelism
         self.pipeline_router: PipelineRouter | None = None
         self.remote_sequential: RemoteSequential | None = None
@@ -227,12 +238,46 @@ class DistributedTrainingEngine:
             return TrimmedMean(trim_ratio=self.config.trim_ratio)
         return FederatedAveraging()
 
+    def run_preflight(
+        self,
+        datasets: list[tuple[Any, str]] | None = None,
+        expected_model_hash: str | None = None,
+        weight_path: str | Path | None = None,
+    ) -> PreflightReport:
+        """Run mandatory pre-flight security checks before training.
+
+        Must be called before initialize(). Blocks training if any
+        CRITICAL check fails.
+        """
+        gate = PreflightGate(
+            config=self.config,
+            expected_model_hash=expected_model_hash,
+            weight_path=weight_path,
+        )
+        for ds, name in datasets or []:
+            gate.add_dataset(ds, name)
+
+        self.preflight_report = gate.run(self.model)
+        return self.preflight_report
+
     async def initialize(
         self,
         initial_peers: list[str] | None = None,
         node_info: PeerInfo | None = None,
     ) -> None:
         """Initialize DHT, discover peers, and set up hivemind optimizer."""
+        # Preflight is mandatory — must be run before initialize()
+        if self.preflight_report is None:
+            raise RuntimeError(
+                "Pre-flight security checks not run. "
+                "Call run_preflight() before initialize()."
+            )
+        if not self.preflight_report.passed:
+            raise RuntimeError(
+                "Pre-flight security checks failed — training blocked. "
+                f"Critical issues: {len(self.preflight_report.critical_failures)}"
+            )
+
         self.status = TrainingStatus.DISCOVERING_PEERS
         logger.info("Initializing distributed training for project %s", self.config.project_id)
 

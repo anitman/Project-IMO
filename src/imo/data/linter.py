@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -10,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 from datasets import Dataset
+
+logger = logging.getLogger(__name__)
 
 
 class QualityLevel(Enum):
@@ -234,6 +237,142 @@ class DatasetLinter:
             score -= 0.05
 
         return max(0.0, min(1.0, score))
+
+    def _determine_quality_level(self, score: float) -> QualityLevel:
+        """Map quality score to level."""
+        if score >= 0.9:
+            return QualityLevel.EXCELLENT
+        elif score >= 0.75:
+            return QualityLevel.HIGH
+        elif score >= 0.6:
+            return QualityLevel.MEDIUM
+        else:
+            return QualityLevel.LOW
+
+
+class CleanlabLinter:
+    """ML-powered data quality detection using Cleanlab.
+
+    Complements rule-based DatasetLinter with learned quality signals:
+    - Label error detection (confident learning)
+    - Near-duplicate detection beyond exact hash matching
+    - Outlier detection that understands the data distribution
+    - Per-sample quality scores
+
+    Cleanlab uses the model's own predictions to find samples where the
+    given label disagrees with what the model has learned — a much stronger
+    signal than simple heuristics.
+
+    Requires: pip install cleanlab
+    Reference: https://github.com/cleanlab/cleanlab
+    """
+
+    def __init__(
+        self,
+        label_column: str = "label",
+        text_column: str = "text",
+        confidence_threshold: float = 0.5,
+    ):
+        self.label_column = label_column
+        self.text_column = text_column
+        self.confidence_threshold = confidence_threshold
+
+    def find_label_issues(
+        self,
+        labels: list[int],
+        pred_probs: Any,
+    ) -> LintResult:
+        """Find label errors using Cleanlab's confident learning.
+
+        Args:
+            labels: Ground truth labels (integer-encoded).
+            pred_probs: Model's predicted class probabilities (N x K numpy array).
+                        Typically from cross-validated predictions.
+        """
+        try:
+            from cleanlab.filter import (
+                find_label_issues as cl_find_issues,  # type: ignore[import-not-found]
+            )
+            from cleanlab.rank import get_label_quality_scores  # type: ignore[import-not-found]
+        except ImportError:
+            return LintResult(
+                quality_score=0.0,
+                quality_level=QualityLevel.LOW,
+                issues=["Cleanlab not installed — run: pip install cleanlab"],
+                warnings=[],
+                stats={},
+            )
+
+        import numpy as np
+
+        labels_arr = np.array(labels)
+
+        issue_mask = cl_find_issues(labels_arr, pred_probs)
+        quality_scores = get_label_quality_scores(labels_arr, pred_probs)
+
+        issue_indices = list(np.where(issue_mask)[0])
+        low_quality_indices = list(np.where(quality_scores < self.confidence_threshold)[0])
+
+        issues: list[str] = []
+        warnings: list[str] = []
+        stats: dict[str, Any] = {
+            "num_label_issues": len(issue_indices),
+            "label_issue_indices": issue_indices[:100],
+            "avg_label_quality": float(np.mean(quality_scores)),
+            "min_label_quality": float(np.min(quality_scores)),
+            "num_low_quality": len(low_quality_indices),
+        }
+
+        issue_rate = len(issue_indices) / len(labels) if labels else 0
+        if issue_rate > 0.2:
+            issues.append(
+                f"High label error rate: {issue_rate:.1%} ({len(issue_indices)} samples)"
+            )
+        elif issue_rate > 0.05:
+            warnings.append(
+                f"Label errors detected: {issue_rate:.1%} ({len(issue_indices)} samples)"
+            )
+
+        if stats["avg_label_quality"] < 0.5:
+            issues.append(f"Low average label quality: {stats['avg_label_quality']:.3f}")
+
+        quality_score = max(0.0, min(1.0, 1.0 - issue_rate - len(issues) * 0.15))
+
+        return LintResult(
+            quality_score=quality_score,
+            quality_level=self._determine_quality_level(quality_score),
+            issues=issues,
+            warnings=warnings,
+            stats=stats,
+        )
+
+    def find_outliers(
+        self,
+        features: Any,
+    ) -> dict[str, Any]:
+        """Find outlier samples using Cleanlab's OutOfDistribution detector.
+
+        Args:
+            features: Feature embeddings (N x D numpy array).
+                      E.g. from a sentence-transformer or CLIP encoder.
+        """
+        try:
+            from cleanlab.outlier import OutOfDistribution  # type: ignore[import-not-found]
+        except ImportError:
+            return {"error": "Cleanlab not installed — run: pip install cleanlab"}
+
+        ood = OutOfDistribution()
+        ood_scores = ood.fit_score(features=features)
+
+        import numpy as np
+        outlier_indices = list(np.where(ood_scores < self.confidence_threshold)[0])
+
+        return {
+            "num_outliers": len(outlier_indices),
+            "outlier_indices": outlier_indices[:100],
+            "avg_ood_score": float(np.mean(ood_scores)),
+            "min_ood_score": float(np.min(ood_scores)),
+        }
 
     def _determine_quality_level(self, score: float) -> QualityLevel:
         """Map quality score to level."""

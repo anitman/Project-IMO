@@ -9,10 +9,16 @@ from imo.data.dataset_spec import (
     ModelCategory,
     get_model_category_description,
 )
-from imo.data.linter import DatasetLinter, LintResult, QualityLevel
+from imo.data.linter import CleanlabLinter, DatasetLinter, LintResult, QualityLevel
 from imo.data.privacy import DifferentialPrivacy, SecureAggregation
 from imo.data.provenance import DataProvenance, ProvenanceRecord, TransformationType
-from imo.data.security import CodeSecurityScanner, SecurityIssue, SecurityResult, ThreatLevel
+from imo.data.security import (
+    CodeSecurityScanner,
+    SecurityIssue,
+    SecurityResult,
+    SemgrepScanner,
+    ThreatLevel,
+)
 
 __all__ = [
     "DatasetLinter",
@@ -36,4 +42,6 @@ __all__ = [
     "DatasetSpec",
     "MODEL_DATASET_SPECS",
     "get_model_category_description",
+    "CleanlabLinter",
+    "SemgrepScanner",
 ]

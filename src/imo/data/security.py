@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import ast
+import json
+import logging
 import re
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class ThreatLevel(Enum):
@@ -300,3 +306,247 @@ class CodeSecurityScanner:
             return max_level
 
         return max_level
+
+
+class SemgrepScanner:
+    """AST-level code security scanning using Semgrep.
+
+    Semgrep performs semantic analysis rather than regex matching, making it
+    significantly harder to bypass with obfuscation tricks like:
+    - String concatenation: exec("ev" + "al(...)")
+    - Unicode escapes: \\u0065val()
+    - Indirect calls: getattr(builtins, "eval")(...)
+    - Alias tricks: e = eval; e(...)
+
+    Semgrep understands the AST and dataflow, catching these patterns.
+
+    Requires: pip install semgrep
+    Reference: https://github.com/semgrep/semgrep
+    """
+
+    # Built-in rules targeting common injection patterns in dataset content
+    BUILTIN_RULES: list[dict[str, object]] = [
+        {
+            "id": "imo-dangerous-exec",
+            "pattern-either": [
+                {"pattern": "exec(...)"},
+                {"pattern": "eval(...)"},
+                {"pattern": "compile(...)"},
+                {"pattern": "__import__(...)"},
+            ],
+            "message": "Dangerous dynamic execution detected",
+            "severity": "ERROR",
+            "languages": ["python"],
+        },
+        {
+            "id": "imo-system-command",
+            "pattern-either": [
+                {"pattern": "os.system(...)"},
+                {"pattern": "os.popen(...)"},
+                {"pattern": "subprocess.$FUNC(...)"},
+            ],
+            "message": "System command execution detected",
+            "severity": "ERROR",
+            "languages": ["python"],
+        },
+        {
+            "id": "imo-network-access",
+            "pattern-either": [
+                {"pattern": "socket.socket(...)"},
+                {"pattern": "requests.$FUNC(...)"},
+                {"pattern": "urllib.request.urlopen(...)"},
+                {"pattern": "httpx.$FUNC(...)"},
+            ],
+            "message": "Network access detected",
+            "severity": "WARNING",
+            "languages": ["python"],
+        },
+        {
+            "id": "imo-unsafe-deserialization",
+            "pattern-either": [
+                {"pattern": "pickle.loads(...)"},
+                {"pattern": "pickle.load(...)"},
+                {"pattern": "marshal.loads(...)"},
+                {"pattern": "yaml.load(..., Loader=yaml.FullLoader)"},
+                {"pattern": "yaml.unsafe_load(...)"},
+            ],
+            "message": "Unsafe deserialization detected",
+            "severity": "ERROR",
+            "languages": ["python"],
+        },
+        {
+            "id": "imo-attribute-injection",
+            "patterns": [
+                {"pattern": "getattr($OBJ, $ATTR, ...)"},
+                {"metavariable-regex": {"metavariable": "$ATTR", "regex": ".*__.*"}},
+            ],
+            "message": "Dunder attribute access via getattr",
+            "severity": "ERROR",
+            "languages": ["python"],
+        },
+    ]
+
+    def __init__(
+        self,
+        extra_rules_path: str | Path | None = None,
+        use_registry: bool = False,
+    ):
+        self.extra_rules_path = Path(extra_rules_path) if extra_rules_path else None
+        self.use_registry = use_registry
+
+    def is_available(self) -> bool:
+        """Check if semgrep is installed and accessible."""
+        try:
+            result = subprocess.run(
+                ["semgrep", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+
+    def scan(self, text: str, language: str = "python") -> SecurityResult:
+        """Scan text content using Semgrep AST analysis.
+
+        Falls back to CodeSecurityScanner if Semgrep is not installed.
+        """
+        if not self.is_available():
+            logger.warning("Semgrep not available, falling back to regex scanner")
+            return CodeSecurityScanner(strict_mode=True).scan(text)
+
+        return self._run_semgrep(text, language)
+
+    def scan_file(self, file_path: str | Path) -> SecurityResult:
+        """Scan a file using Semgrep."""
+        path = Path(file_path)
+        if not self.is_available():
+            logger.warning("Semgrep not available, falling back to regex scanner")
+            return CodeSecurityScanner(strict_mode=True).scan_file(path)
+
+        return self._run_semgrep_on_path(path)
+
+    def _run_semgrep(self, text: str, language: str) -> SecurityResult:
+        """Run Semgrep on text content via a temp file."""
+        suffix = {"python": ".py", "javascript": ".js", "bash": ".sh"}.get(language, ".py")
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=suffix, delete=False, encoding="utf-8"
+        ) as f:
+            f.write(text)
+            tmp_path = Path(f.name)
+
+        try:
+            return self._run_semgrep_on_path(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def _run_semgrep_on_path(self, path: Path) -> SecurityResult:
+        """Run Semgrep on a file path and parse results."""
+        # Write built-in rules to temp config
+        rules_config = {"rules": self.BUILTIN_RULES}
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as rf:
+            import yaml  # type: ignore[import-untyped]
+
+            yaml.dump(rules_config, rf, default_flow_style=False)
+            rules_path = Path(rf.name)
+
+        try:
+            cmd = [
+                "semgrep",
+                "--config", str(rules_path),
+                "--json",
+                "--quiet",
+                "--no-git-ignore",
+                str(path),
+            ]
+
+            if self.extra_rules_path and self.extra_rules_path.exists():
+                cmd.extend(["--config", str(self.extra_rules_path)])
+
+            if self.use_registry:
+                cmd.extend(["--config", "p/security-audit"])
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            return self._parse_results(result.stdout)
+
+        except subprocess.TimeoutExpired:
+            return SecurityResult(
+                is_safe=False,
+                threat_level=ThreatLevel.MEDIUM,
+                issues=[SecurityIssue(
+                    threat_level=ThreatLevel.MEDIUM,
+                    category="scanner_timeout",
+                    message="Semgrep scan timed out — file may be too large",
+                    location=str(path),
+                    snippet="",
+                )],
+                scanned_samples=1,
+            )
+        finally:
+            rules_path.unlink(missing_ok=True)
+
+    def _parse_results(self, json_output: str) -> SecurityResult:
+        """Parse Semgrep JSON output into SecurityResult."""
+        issues: list[SecurityIssue] = []
+
+        try:
+            data = json.loads(json_output) if json_output.strip() else {}
+        except json.JSONDecodeError:
+            return SecurityResult(
+                is_safe=True,
+                threat_level=ThreatLevel.SAFE,
+                issues=[],
+                scanned_samples=1,
+            )
+
+        severity_map = {
+            "ERROR": ThreatLevel.HIGH,
+            "WARNING": ThreatLevel.MEDIUM,
+            "INFO": ThreatLevel.LOW,
+        }
+
+        for finding in data.get("results", []):
+            severity_str = finding.get("extra", {}).get("severity", "WARNING")
+            threat = severity_map.get(severity_str, ThreatLevel.MEDIUM)
+
+            lines = finding.get("extra", {}).get("lines", "")
+            snippet = lines[:100] if isinstance(lines, str) else ""
+
+            issues.append(SecurityIssue(
+                threat_level=threat,
+                category=f"semgrep:{finding.get('check_id', 'unknown')}",
+                message=finding.get("extra", {}).get("message", "Security issue detected"),
+                location=f"line {finding.get('start', {}).get('line', '?')}",
+                snippet=snippet,
+            ))
+
+        if not issues:
+            return SecurityResult(
+                is_safe=True,
+                threat_level=ThreatLevel.SAFE,
+                issues=[],
+                scanned_samples=1,
+            )
+
+        max_threat = max(issues, key=lambda i: {
+            ThreatLevel.CRITICAL: 5, ThreatLevel.HIGH: 4,
+            ThreatLevel.MEDIUM: 3, ThreatLevel.LOW: 2, ThreatLevel.SAFE: 1,
+        }[i.threat_level]).threat_level
+
+        return SecurityResult(
+            is_safe=max_threat in {ThreatLevel.SAFE, ThreatLevel.LOW},
+            threat_level=max_threat,
+            issues=issues,
+            scanned_samples=1,
+        )

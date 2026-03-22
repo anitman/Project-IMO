@@ -110,16 +110,19 @@ Built-in denoising diffusion training loop with:
 │ Security   │ Voting   │  │    (pluggable)       │  │ VRAM Scheduler │
 │ Privacy    │ Rewards  │  │                      │  │ Gradient       │
 │ Provenance │ Registry │  │  load_model()        │  │ Compression    │
-│ Aggregator │ IMO      │  │  compute_loss()      │  │                │
-│            │          │  │  create_optimizer()  │  │                │
-│            │          │  └───────────┬──────────┘  │                │
+│ Aggregator │ IMO      │  │  compute_loss()      │  │ mTLS Transport │
+│ Cleanlab   │ Snapshot │  │  create_optimizer()  │  │ Node Auth      │
+│ Semgrep    │          │  └───────────┬──────────┘  │ Node Manager   │
 │            │          │              │             │                │
 │            │          │  ┌───────────▼──────────┐  │                │
 │            │          │  │   Training Engine    │  │                │
 │            │          │  │                      │  │                │
-│            │          │  │   Hivemind DHT       │◄─┤                │
+│            │          │  │   Preflight Gate     │◄─┤                │
+│            │          │  │   Hivemind DHT       │  │                │
 │            │          │  │   Pipeline Parallel  │  │                │
 │            │          │  │   Byzantine Aggreg   │  │                │
+│            │          │  │   FLTrust / Verifier │  │                │
+│            │          │  │   Canary Detection   │  │                │
 │            │          │  │   Checkpointing      │  │                │
 │            │          │  └──────────────────────┘  │                │
 ├────────────┴──────────┼────────────────────────────┼────────────────┤
@@ -179,20 +182,20 @@ The core design insight: **Toolkits know how to load models and compute loss. Th
 All toolkits plug into the same `DistributedTrainingEngine`. The engine handles Hivemind DHT, layer splitting, gradient aggregation, and Byzantine fault tolerance — regardless of which toolkit loaded the model.
 
 ### Node Layer (`src/imo/node/`)
-Peer-to-peer networking. Discovers peers via Hivemind DHT, schedules model layers across heterogeneous VRAM (bin-packing), compresses gradients (Top-K sparsification, sign encoding) for bandwidth efficiency.
+Peer-to-peer networking with full identity and encryption. Discovers peers via Hivemind DHT, schedules model layers across heterogeneous VRAM (bin-packing), compresses gradients (Top-K sparsification, sign encoding). Every node holds an Ed25519 identity keypair and communicates over mutual TLS. `NodeManager` orchestrates the full lifecycle: recruitment → registration → challenge-response authentication → TLS channel → training → monitoring → eviction.
 
 ### Training Engine (`src/imo/training/`)
-`DistributedTrainingEngine` orchestrates the full distributed loop. Accepts a `TrainingToolkit` for model loading and loss computation. Handles: Hivemind optimizer setup, pipeline parallelism (`BlockServer` / `RemoteSequential`), gradient compression/averaging, Byzantine-robust aggregation (trimmed mean / Krum), poisoning detection, checkpointing. Factory method: `DistributedTrainingEngine.from_toolkit(config, toolkit, spec)`.
+`DistributedTrainingEngine` orchestrates the full distributed loop. Accepts a `TrainingToolkit` for model loading and loss computation. Handles: mandatory pre-flight security gate, Hivemind optimizer setup, pipeline parallelism (`BlockServer` / `RemoteSequential`), gradient compression/averaging, Byzantine-robust aggregation (trimmed mean / Krum / FLTrust), poisoning detection, redundant computation verification, canary-based integrity monitoring, warmup trust for new nodes, and checkpointing. Factory method: `DistributedTrainingEngine.from_toolkit(config, toolkit, spec)`.
 
 ### Protocol Layer (`src/imo/protocol/`)
 `Project` is the central coordination unit. Lifecycle: draft → open_for_data → voting → approved → training → evaluating → completed. 7 training modes: from_scratch, full_fine_tune, LoRA, QLoRA, continual_pretrain, distillation, hybrid. Tracks dataset and compute contributions. Quality-adjusted reward distribution (40% data / 50% compute / 10% paper).
 
 ### Data Layer (`src/imo/data/`)
-Quality linting, code injection scanning (AST-level, multi-language), differential privacy (Gaussian/Laplace noise via Opacus), data provenance tracking (SHA-256 hashing), and multi-source dataset aggregation with proportional/balanced sampling.
+Quality linting (including ML-powered label issue detection via Cleanlab), code injection scanning (AST-level multi-language + Semgrep), differential privacy (Gaussian/Laplace noise via Opacus), secure aggregation (pairwise additive masking), data provenance tracking (SHA-256 hashing), and multi-source dataset aggregation with proportional/balanced sampling.
 
 ### Smart Contracts (`contracts/`)
-- **IMOToken.sol** — ERC-20 with quality-based reward distribution. Tracks contributor scores on-chain, proportional reward claims per pool (data/compute/paper).
-- **IMOGovernance.sol** — Proposal lifecycle and stake-weighted voting with quorum enforcement.
+- **IMOToken.sol** — ERC-20 with quality-based reward distribution. Reentrancy-guarded contributor score tracking, proportional reward claims per pool (data/compute/paper).
+- **IMOGovernance.sol** — Proposal lifecycle with balance-snapshot voting (anti flash-loan), stake-weighted quorum enforcement.
 
 ---
 
@@ -260,6 +263,19 @@ imo toolkit info hf_trainer
 
 # Install a toolkit's dependencies
 imo toolkit install unsloth
+```
+
+### Security
+
+```bash
+# Run pre-training security checks on a model
+imo security preflight ./model.safetensors --dataset data.parquet
+
+# Scan a file for code injection vulnerabilities
+imo security scan untrusted_script.py --scanner both
+
+# Show all active security mechanisms
+imo security audit
 ```
 
 ### Check Node Status
@@ -362,21 +378,88 @@ pytest --cov=imo --cov-report=term-missing       # coverage
 | `torch`          | Deep learning framework                           |
 | `transformers`   | Model architectures and tokenizers                |
 | `datasets`       | Dataset loading and processing                    |
+| `cryptography`   | Ed25519 node identity, X.509 certificates, mTLS   |
 | `opacus`         | Differential privacy for PyTorch                  |
 | `web3`           | Ethereum smart contract interaction               |
 | `pydantic`       | Data validation                                   |
 | `click`          | CLI framework                                     |
 | `rich`           | Terminal UI (tables, colors, progress)             |
 
+Optional security extras (`pip install -e ".[security]"`):
+
+| Package          | Purpose                                           |
+|------------------|---------------------------------------------------|
+| `cleanlab`       | ML-powered label issue and outlier detection       |
+| `semgrep`        | AST-level code security scanning                   |
+
 ---
 
 ## Security
 
-- **Gradient Poisoning Detection** — Z-score anomaly detection + reputation tracking. Malicious nodes get exponentially decayed trust.
-- **Byzantine-Robust Aggregation** — Trimmed mean, Krum, and coordinate-wise median resist up to `f` Byzantine workers.
-- **Dataset Security Scanning** — AST-level code injection detection across Python, JavaScript, and shell. Blocks `eval()`, `subprocess`, `pickle`, etc.
-- **Differential Privacy** — Gaussian/Laplace noise addition with formal (ε, δ)-DP guarantees via Opacus.
-- **Data Provenance** — SHA-256 content hashing and full transformation lineage for integrity verification.
+IMO is designed for adversarial environments where any participant may be malicious. Security is enforced at every stage of the training lifecycle:
+
+### Node Identity & Authentication
+
+| Mechanism                      | Description                                                                 |
+|-------------------------------|-----------------------------------------------------------------------------|
+| **Ed25519 Identity**          | Each node holds a cryptographic keypair; `node_id = SHA-256(public_key)`    |
+| **Challenge-Response Auth**   | Nodes prove identity by signing random nonces before joining training       |
+| **Admission Control**         | Per-project policies: open, invite-only, or stake-required                  |
+| **mTLS Transport**            | All node-to-node communication encrypted via mutual TLS 1.3                 |
+| **Node Lifecycle Management** | Full lifecycle: recruit → register → authenticate → connect → train → evict |
+| **Heartbeat Monitoring**      | Dead or unresponsive nodes are automatically evicted                        |
+
+### Pre-Training Security Gate (Preflight)
+
+Training **cannot start** until all preflight checks pass:
+
+| Check                        | What It Does                                                               |
+|------------------------------|----------------------------------------------------------------------------|
+| **SafeModelLoader**          | Prefers safetensors; blocks pickle RCE in `.pt` files (`weights_only=True`)|
+| **ModelIntegrityVerifier**   | SHA-256 per-parameter manifest; detects tampered weights                   |
+| **ConfigValidator**          | Bounds-checks learning rate, batch size, trim ratio, etc.                  |
+| **DatasetQuarantine**        | Security-scans all datasets for code injection before training begins      |
+| **WarmupTrustPolicy**        | New nodes start at 0.3x trust weight, ramp to 1.0x over 100 steps         |
+| **CanaryDetector**           | Embeds sentinel samples; monitors for loss spikes indicating poisoning     |
+
+### Training Runtime Defense
+
+| Mechanism                         | Description                                                                  |
+|-----------------------------------|-----------------------------------------------------------------------------|
+| **Byzantine-Robust Aggregation**  | Trimmed mean, Krum, coordinate-wise median — resists up to `f` Byzantine workers |
+| **FLTrust (Trusted Root)**        | Weights node gradients by cosine similarity to a trusted reference gradient (NDSS 2021) |
+| **Redundant Verification**        | Spot-checks batches across multiple nodes; flags divergent results          |
+| **Gradient Anomaly Detection**    | Z-score based anomaly detection + exponential reputation decay              |
+| **Poisoning Detection**           | Automatic node banning after configurable strike limit                       |
+| **TLS-Enforced Gradient Exchange**| GradientCommunicator rejects peers without verified TLS channels            |
+
+### Data Layer Security
+
+| Mechanism                    | Description                                                                  |
+|------------------------------|-----------------------------------------------------------------------------|
+| **Code Injection Scanning**  | AST-level detection across Python, JavaScript, shell (blocks `eval`, `exec`, `pickle`, etc.) |
+| **Semgrep Integration**      | Custom SAST rules for dangerous-exec, network-access, unsafe-deserialization |
+| **Cleanlab Integration**     | ML-powered label issue detection and out-of-distribution sample flagging     |
+| **Differential Privacy**     | Gaussian/Laplace noise with formal (ε, δ)-DP guarantees via Opacus          |
+| **Secure Aggregation**       | Pairwise additive masking — individual gradients never exposed (Bonawitz CCS 2017) |
+| **Data Provenance**          | SHA-256 content hashing and full transformation lineage                      |
+
+### Smart Contract Security
+
+| Mechanism                    | Description                                                                  |
+|------------------------------|-----------------------------------------------------------------------------|
+| **Reentrancy Guard**         | All state-changing functions use OpenZeppelin `nonReentrant`                 |
+| **Checks-Effects-Interactions** | State updated before external calls in reward distribution                |
+| **Voting Snapshot**          | Voter balances locked before voting to prevent flash-loan manipulation       |
+| **Role-Based Access**        | `MINTER_ROLE`, `EVALUATOR_ROLE`, `TREASURY_ROLE` via OpenZeppelin AccessControl |
+
+### Serialization Safety
+
+| Layer         | Before                  | After                                          |
+|---------------|-------------------------|------------------------------------------------|
+| Transport     | `pickle.loads` (RCE)    | JSON serialization only — no arbitrary code execution |
+| Checkpoints   | `torch.load` (unsafe)   | `torch.load(weights_only=True)` + safetensors preferred |
+| Model Loading | Unrestricted            | SafeModelLoader scans for dangerous pickle modules      |
 
 ---
 
